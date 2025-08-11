@@ -1,0 +1,13 @@
+{
+  "name": "log-server",
+  "version": "1.0.0",
+  "description": "Unified Log Server for Project Chronos",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5"
+  }
+}

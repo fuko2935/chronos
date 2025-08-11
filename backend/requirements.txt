@@ -1,0 +1,7 @@
+Flask>=2.0
+redis>=4.0
+boto3>=1.20
+pytest>=7.0
+celery[redis]>=5.0
+dspy-ai>=2.0
+google-generativeai>=0.4.0

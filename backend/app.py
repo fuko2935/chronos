@@ -7,6 +7,8 @@ from botocore.exceptions import ClientError
 from flask import Flask, request, jsonify
 from celery import Celery
 from datetime import datetime
+from ai_core import query_video_transcript
+from utils.key_manager import key_manager
 
 # --- App Initialization ---
 app = Flask(__name__)
@@ -221,6 +223,99 @@ def get_task_status(task_id):
     }
 
     return jsonify(response)
+
+
+@app.route('/chat', methods=['POST'])
+def chat_with_video():
+    """
+    Handles a user's chat query about a video.
+    """
+    data = request.get_json()
+    object_key = data.get('objectKey')
+    user_query = data.get('query')
+
+    if not all([object_key, user_query]):
+        return jsonify({"error": "objectKey and query are required"}), 400
+
+    try:
+        # Simplification: Assume the first segment is the one to query.
+        # A more robust solution would find all segments for the object_key.
+        base_name = os.path.splitext(os.path.basename(object_key))[0]
+        transcript_s3_path = f"transcripts/{base_name}_000.json"
+
+        # Call the RAG pipeline
+        result = query_video_transcript(
+            transcript_s3_path=transcript_s3_path,
+            bucket_name=S3_BUCKET_NAME,
+            user_query=user_query
+        )
+
+        return jsonify(result)
+
+    except Exception as e:
+        # This could be a FileNotFoundError from S3, or an LLM error.
+        print(f"Error in /chat endpoint: {e}")
+        return jsonify({"error": "Failed to process chat query."}), 500
+
+
+@app.route('/render', methods=['POST'])
+def render_clips_endpoint():
+    """
+    Triggers an asynchronous task to render a video from a list of clips.
+    """
+    data = request.get_json()
+    clips = data.get('clips')
+
+    if not clips or not isinstance(clips, list):
+        return jsonify({"error": "'clips' must be a non-empty list"}), 400
+
+    try:
+        task = celery_app.send_task(
+            'tasks.render_video_clips',
+            args=[clips, S3_BUCKET_NAME]
+        )
+        return jsonify({"taskId": task.id})
+    except Exception as e:
+        print(f"Error triggering render task: {e}")
+        return jsonify({"error": "Failed to trigger render task."}), 500
+
+
+@app.route('/render/remaining', methods=['POST'])
+def render_remaining_clips_endpoint():
+    """
+    Triggers an asynchronous task to render the remaining clips of a video.
+    """
+    data = request.get_json()
+    selected_clips = data.get('selected_clips')
+    source_object_key = data.get('source_object_key')
+
+    if not all([selected_clips, source_object_key]):
+        return jsonify({"error": "'selected_clips' and 'source_object_key' are required"}), 400
+    if not isinstance(selected_clips, list):
+        return jsonify({"error": "'selected_clips' must be a list"}), 400
+
+    try:
+        task = celery_app.send_task(
+            'tasks.render_remaining_clips',
+            args=[selected_clips, source_object_key, S3_BUCKET_NAME]
+        )
+        return jsonify({"taskId": task.id})
+    except Exception as e:
+        print(f"Error triggering remaining clips render task: {e}")
+        return jsonify({"error": "Failed to trigger remaining clips render task."}), 500
+
+
+@app.route('/keys/status', methods=['GET'])
+def key_status_endpoint():
+    """
+    Returns the current status of the managed API keys.
+    """
+    try:
+        status = key_manager.get_key_states()
+        return jsonify(status)
+    except Exception as e:
+        print(f"Error getting key status: {e}")
+        return jsonify({"error": "Failed to retrieve key status."}), 500
 
 
 @app.route('/health', methods=['GET'])

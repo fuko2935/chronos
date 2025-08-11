@@ -1,9 +1,12 @@
 import os
 import boto3
 import redis
+import json
 from botocore.client import Config
 from botocore.exceptions import ClientError
 from flask import Flask, request, jsonify
+from celery import Celery
+from datetime import datetime
 
 # --- App Initialization ---
 app = Flask(__name__)
@@ -55,6 +58,14 @@ try:
 except redis.exceptions.ConnectionError as e:
     print(f"Error connecting to Redis: {e}")
     redis_client = None
+
+# Celery Client
+# This instance is only used for sending tasks. The worker definition is in the 'workers' directory.
+celery_app = Celery(
+    'backend_tasks',
+    broker=f"redis://{REDIS_HOST}:{REDIS_PORT}/0",
+    backend=f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
+)
 
 # --- Multipart Upload API Endpoints ---
 
@@ -153,7 +164,17 @@ def complete_upload():
         }
         redis_client.publish(REDIS_CHANNEL, json.dumps(event_message))
 
-        return jsonify({"status": "upload complete", "objectKey": object_key})
+        # Trigger the video processing task
+        task = celery_app.send_task(
+            'tasks.process_video',
+            args=[object_key, S3_BUCKET_NAME]
+        )
+
+        return jsonify({
+            "status": "upload complete, processing started",
+            "objectKey": object_key,
+            "taskId": task.id
+        })
 
     except ClientError as e:
         print(f"Error completing multipart upload: {e}")
@@ -184,6 +205,22 @@ def abort_upload():
     except ClientError as e:
         print(f"Error aborting multipart upload: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/upload/status/<task_id>', methods=['GET'])
+def get_task_status(task_id):
+    """
+    Retrieves the status of a Celery task.
+    """
+    task_result = celery_app.AsyncResult(task_id)
+
+    response = {
+        'taskId': task_id,
+        'state': task_result.state,
+        'info': task_result.info,
+    }
+
+    return jsonify(response)
 
 
 @app.route('/health', methods=['GET'])
